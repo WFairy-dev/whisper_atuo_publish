@@ -36,8 +36,15 @@ def new_task_id() -> str:
 
 
 def upload_filename(file_path: str | Path) -> str:
-    """交给服务端记下的路径。反斜杠在上传时会被收成文件名，这里统一成正斜杠。"""
+    """记到结果里的路径文字。统一成正斜杠，服务不会按它打开磁盘。"""
     return str(file_path).replace("\\", "/")
+
+
+def _upload_form(file_path: Path, task_id: str, handle) -> tuple[dict[str, str], dict]:
+    recorded = upload_filename(file_path)
+    data = {"task_id": task_id, "source_file_path": recorded}
+    files = {"file": (Path(recorded).name, handle)}
+    return data, files
 
 
 def submit_asr(
@@ -49,12 +56,11 @@ def submit_asr(
     timeout: float = 120.0,
 ) -> str:
     url = f"{base_url.rstrip('/')}/v1/asr"
-    recorded = upload_filename(file_path)
     with file_path.open("rb") as f:
-        files = {"source_file_path": (recorded, f)}
+        data, files = _upload_form(file_path, task_id, f)
         r = httpx.post(
             url,
-            data={"task_id": task_id},
+            data=data,
             files=files,
             headers=_headers(api_key),
             timeout=timeout,
@@ -163,12 +169,11 @@ def transcribe_sync(
 ) -> dict[str, Any]:
     path = Path(file_path)
     url = f"{base_url.rstrip('/')}/v1/asr/sync"
-    recorded = upload_filename(path)
     with path.open("rb") as f:
-        files = {"source_file_path": (recorded, f)}
+        data, files = _upload_form(path, task_id, f)
         r = httpx.post(
             url,
-            data={"task_id": task_id},
+            data=data,
             files=files,
             headers=_headers(api_key),
             timeout=timeout,

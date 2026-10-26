@@ -231,8 +231,11 @@ def run_api(base: str, key: str, sample: Path, out_path: Path) -> dict[str, Any]
         with sample.open("rb") as f:
             r = httpx.post(
                 url,
-                data={"task_id": new_task_id()},
-                files={"source_file_path": (upload_filename(sample), f)},
+                data={
+                    "task_id": new_task_id(),
+                    "source_file_path": upload_filename(sample),
+                },
+                files={"file": (sample.name, f)},
                 timeout=60,
             )
         if r.status_code != 401:
@@ -243,8 +246,11 @@ def run_api(base: str, key: str, sample: Path, out_path: Path) -> dict[str, Any]
         url = f"{base.rstrip('/')}/v1/asr"
         r = httpx.post(
             url,
-            data={"task_id": new_task_id()},
-            files={"source_file_path": ("D:/share/videos/note.txt", b"hello", "text/plain")},
+            data={
+                "task_id": new_task_id(),
+                "source_file_path": "D:/share/videos/note.txt",
+            },
+            files={"file": ("note.txt", b"hello", "text/plain")},
             headers={"X-API-Key": key},
             timeout=30,
         )

@@ -168,15 +168,12 @@ def health():
     return engine.stats()
 
 
-def _parse_upload_name(filename: Optional[str]) -> tuple[str, str, str]:
-    """从上传文件名取出要记下的路径、后缀、最后一段文件名。
-
-    这里的路径只是文字，服务端不会按它去打开调用方磁盘。
-    """
-    source_path = (filename or "").strip()
-    if not source_path or "\x00" in source_path:
+def _parse_upload_name(filename: Optional[str]) -> tuple[str, str]:
+    """从上传文件名取出后缀和最后一段文件名。路径文字不从这里取。"""
+    raw_name = (filename or "").strip()
+    if not raw_name or "\x00" in raw_name:
         raise _http_error(400, "INVALID_REQUEST", "缺少文件名", retryable=False)
-    original_name = source_path.replace("\\", "/").rsplit("/", 1)[-1]
+    original_name = raw_name.replace("\\", "/").rsplit("/", 1)[-1]
     suffix = Path(original_name).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         shown = suffix or "（无后缀）"
@@ -186,11 +183,11 @@ def _parse_upload_name(filename: Optional[str]) -> tuple[str, str, str]:
             f"不支持的文件类型: {shown}，允许: {sorted(ALLOWED_SUFFIXES)}",
             retryable=False,
         )
-    return source_path, suffix, original_name
+    return suffix, original_name
 
 
-async def _save_upload(upload: UploadFile) -> tuple[Path, str, str, str, int]:
-    source_path, suffix, original_name = _parse_upload_name(upload.filename)
+async def _save_upload(upload: UploadFile) -> tuple[Path, str, str, int]:
+    suffix, original_name = _parse_upload_name(upload.filename)
 
     config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
     size = 0
@@ -221,7 +218,7 @@ async def _save_upload(upload: UploadFile) -> tuple[Path, str, str, str, int]:
                 )
             tmp.write(chunk)
         tmp_path = Path(tmp.name)
-    return tmp_path, suffix, source_path, original_name, size
+    return tmp_path, suffix, original_name, size
 
 
 def _reject_upload(path: Path) -> None:
@@ -233,17 +230,18 @@ def _reject_upload(path: Path) -> None:
 
 @app.post("/v1/asr", dependencies=[Depends(verify_api_key)])
 async def submit_asr(
-    source_file_path: UploadFile = File(...),
+    file: UploadFile = File(...),
     task_id: str = Form(...),
+    source_file_path: str = Form(...),
 ):
-    """上传音频/视频。字段名 source_file_path 同时带上视频内容和调用方路径。"""
-    tmp_path, suffix, stored_path, original_name, size = await _save_upload(source_file_path)
+    """上传音频或视频。file 是文件内容，source_file_path 只记下调用方路径。"""
+    tmp_path, suffix, original_name, size = await _save_upload(file)
     try:
         task = engine.submit_file(
             tmp_path,
             suffix,
             task_id=task_id,
-            source_file_path=stored_path,
+            source_file_path=source_file_path,
             original_name=original_name,
             file_size=size,
         )
@@ -257,7 +255,7 @@ async def submit_asr(
         ) from e
     except RuntimeError as e:
         _reject_upload(tmp_path)
-        log.warning("拒绝入队 task_id=%s source_file_path=%s reason=%s", task_id, stored_path, e)
+        log.warning("拒绝入队 task_id=%s source_file_path=%s reason=%s", task_id, source_file_path, e)
         raise _http_error(503, "QUEUE_FULL", str(e), retryable=True, task_id=task_id) from e
     return engine.task_to_dict(task)
 
@@ -303,17 +301,18 @@ def get_asr(task_id: str):
 
 @app.post("/v1/asr/sync", dependencies=[Depends(verify_api_key)])
 async def sync_asr(
-    source_file_path: UploadFile = File(...),
+    file: UploadFile = File(...),
     task_id: str = Form(...),
+    source_file_path: str = Form(...),
 ):
     """上传后阻塞直到转写完成（短任务/调试；高并发请用异步接口）。"""
-    tmp_path, suffix, stored_path, original_name, size = await _save_upload(source_file_path)
+    tmp_path, suffix, original_name, size = await _save_upload(file)
     try:
         task = engine.submit_file(
             tmp_path,
             suffix,
             task_id=task_id,
-            source_file_path=stored_path,
+            source_file_path=source_file_path,
             original_name=original_name,
             file_size=size,
         )

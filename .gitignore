@@ -1,0 +1,9 @@
+asr_server/tmp/
+asr_server/results/
+asr_server/logs/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+*.key
+test_video/

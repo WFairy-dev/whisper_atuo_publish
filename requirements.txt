@@ -1,0 +1,6 @@
+openai-whisper
+fastapi
+uvicorn
+python-multipart
+httpx
+torch

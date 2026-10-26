@@ -289,6 +289,7 @@ def _abandon_queue(q: Any) -> None:
 class Task:
     task_id: str
     file_path: Path
+    strict_filter: bool = config.STRICT_FILTER
     source_file_path: str = ""
     original_name: str = ""
     file_size: int = 0
@@ -435,6 +436,7 @@ class AsrEngine:
             in_memory = len(self._tasks)
         return {
             "service_version": config.SERVICE_VERSION,
+            "strict_filter_default": config.STRICT_FILTER,
             "model_loaded": ready > 0,
             "model_name": config.MODEL_NAME,
             "device": config.DEVICE,
@@ -468,9 +470,12 @@ class AsrEngine:
         source_file_path: str,
         original_name: str = "",
         file_size: int = 0,
+        strict_filter: Optional[bool] = None,
     ) -> Task:
         if not self._accepting:
             raise RuntimeError("服务正在关闭，拒绝新任务")
+        if strict_filter is not None and type(strict_filter) is not bool:
+            raise InvalidTaskRequest("strict_filter 必须为布尔值")
 
         task_id = (task_id or "").strip()
         if not result_store.is_safe_task_id(task_id):
@@ -495,6 +500,7 @@ class AsrEngine:
             task = Task(
                 task_id=task_id,
                 file_path=dest,
+                strict_filter=config.STRICT_FILTER if strict_filter is None else strict_filter,
                 source_file_path=source_file_path,
                 original_name=original_name,
                 file_size=file_size,
@@ -696,7 +702,8 @@ class AsrEngine:
         lane.inflight_id = task.task_id
         _log_start(task)
         try:
-            job_q.put({"task_id": task.task_id, "path": str(task.file_path)}, timeout=10)
+            job_q.put({"task_id": task.task_id, "path": str(task.file_path),
+                       "strict_filter": task.strict_filter}, timeout=10)
         except Exception as e:
             lane.busy = False
             lane.inflight_id = None

@@ -40,9 +40,12 @@ def upload_filename(file_path: str | Path) -> str:
     return str(file_path).replace("\\", "/")
 
 
-def _upload_form(file_path: Path, task_id: str, handle) -> tuple[dict[str, str], dict]:
+def _upload_form(file_path: Path, task_id: str, handle,
+                 strict_filter: Optional[bool] = None) -> tuple[dict[str, str], dict]:
     recorded = upload_filename(file_path)
     data = {"task_id": task_id, "source_file_path": recorded}
+    if strict_filter is not None:
+        data["strict_filter"] = str(strict_filter).lower()
     files = {"file": (Path(recorded).name, handle)}
     return data, files
 
@@ -54,10 +57,11 @@ def submit_asr(
     task_id: str,
     api_key: Optional[str] = None,
     timeout: float = 120.0,
+    strict_filter: Optional[bool] = None,
 ) -> str:
     url = f"{base_url.rstrip('/')}/v1/asr"
     with file_path.open("rb") as f:
-        data, files = _upload_form(file_path, task_id, f)
+        data, files = _upload_form(file_path, task_id, f, strict_filter)
         r = httpx.post(
             url,
             data=data,
@@ -126,6 +130,7 @@ def transcribe_wait(
     api_key: Optional[str] = None,
     poll_interval: float = 1.5,
     timeout: float = 3600.0,
+    strict_filter: Optional[bool] = None,
 ) -> dict[str, Any]:
     """
     上传并轮询直到完成。流水线可当同步使用：
@@ -142,6 +147,7 @@ def transcribe_wait(
         path,
         task_id=task_id,
         api_key=api_key,
+        strict_filter=strict_filter,
     )
     deadline = time.time() + timeout
     last: Optional[dict[str, Any]] = None
@@ -166,11 +172,12 @@ def transcribe_sync(
     task_id: str,
     api_key: Optional[str] = None,
     timeout: float = 3600.0,
+    strict_filter: Optional[bool] = None,
 ) -> dict[str, Any]:
     path = Path(file_path)
     url = f"{base_url.rstrip('/')}/v1/asr/sync"
     with path.open("rb") as f:
-        data, files = _upload_form(path, task_id, f)
+        data, files = _upload_form(path, task_id, f, strict_filter)
         r = httpx.post(
             url,
             data=data,
@@ -208,14 +215,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         default="wait",
         help="wait=提交+轮询；sync=阻塞接口",
     )
+    parser.add_argument("--strict-filter", action=argparse.BooleanOptionalAction, default=None,
+                        help="严格过滤可疑文本；--no-strict-filter 保留存疑文本，默认跟随服务端")
     args = parser.parse_args(argv)
     key = args.api_key or None
     task_id = args.task_id or new_task_id()
 
     if args.mode == "sync":
-        result = transcribe_sync(args.file, base_url=args.url, task_id=task_id, api_key=key)
+        result = transcribe_sync(args.file, base_url=args.url, task_id=task_id, api_key=key,
+                                 strict_filter=args.strict_filter)
     else:
-        result = transcribe_wait(args.file, base_url=args.url, task_id=task_id, api_key=key)
+        result = transcribe_wait(args.file, base_url=args.url, task_id=task_id, api_key=key,
+                                 strict_filter=args.strict_filter)
 
     data = result.get("result") or {}
     print(f"status={result.get('status')} language={data.get('language')} task_id={result.get('task_id')}")

@@ -8,17 +8,33 @@
 from __future__ import annotations
 
 import os
+from dataclasses import fields
 from pathlib import Path
+
+from .quality import QualityConfig
 
 # 服务
 HOST = os.getenv("ASR_HOST", "0.0.0.0")
 PORT = int(os.getenv("ASR_PORT", "6006"))
-SERVICE_VERSION = "1.6.0"
+SERVICE_VERSION = "1.8.0"
 
 # 模型
 MODEL_NAME = os.getenv("ASR_MODEL_NAME", "turbo")
 MODEL_DIR = Path(os.getenv("ASR_MODEL_DIR", "/root/autodl-tmp/models/whisper"))
 DEVICE = os.getenv("ASR_DEVICE", "cuda")
+LANGUAGE = os.getenv("ASR_LANGUAGE", "").strip() or None
+_strict_filter = os.getenv("ASR_STRICT_FILTER", "true").strip().lower()
+if _strict_filter not in ("true", "false", "1", "0"):
+    raise ValueError("ASR_STRICT_FILTER must be true/false or 1/0")
+STRICT_FILTER = _strict_filter in ("true", "1")
+# 最多识别两次；第二次关闭前文上下文。1 可关闭补救识别。
+MAX_ATTEMPTS = int(os.getenv("ASR_MAX_ATTEMPTS", "2"))
+if MAX_ATTEMPTS not in (1, 2):
+    raise ValueError("ASR_MAX_ATTEMPTS must be 1 or 2")
+QUALITY = QualityConfig(**{
+    field.name: type(field.default)(os.getenv("ASR_" + field.name.upper(), str(field.default)))
+    for field in fields(QualityConfig)
+})
 
 # 同时转写路数。优先读环境变量，否则读 service.conf 的 workers。
 # 实测第 4 路会耗尽显存，超过上限时按上限启动。

@@ -2,7 +2,7 @@
 """探测这张显卡同时跑 1 路和 2 路语音转写时的显存与耗时。
 
 跑之前要先停掉语音服务，否则服务自己占着的模型会算进显存。
-本脚本只测量，不改服务。生产环境仍然只开 1 路。
+本脚本只测量，不改服务；使用服务端相同的识别和质量处理流程。
 
 示例：
   python scripts/probe_parallel.py --file test_video/xxx.mp4
@@ -17,6 +17,10 @@ import threading
 import time
 import traceback
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def _gpu_query() -> tuple[str, float, float] | None:
@@ -60,6 +64,7 @@ def _worker(
 ) -> None:
     try:
         import whisper
+        from asr_server.infer_worker import transcribe_file
 
         t0 = time.time()
         model = whisper.load_model(model_name, device=device, download_root=model_dir)
@@ -69,7 +74,7 @@ def _worker(
             out.put({"ok": False, "error": "等待开始超时", "load_s": load_s})
             return
         t1 = time.time()
-        model.transcribe(path, verbose=None)
+        transcribe_file(model, path)
         out.put({"ok": True, "load_s": load_s, "infer_s": time.time() - t1})
     except Exception as e:
         try:

@@ -2,7 +2,15 @@
 
 在 **AutoDL（GPU）** 上部署 Whisper 语音转写服务，供 **公司内网 CPU 机器** 上的业务流水线通过 HTTP 调用。
 
-当前版本：**1.6.0**
+当前版本：**1.8.0**
+
+服务端开启词级时间戳，执行结构校验、一次关闭前文上下文的补救识别、片段抢救和置信度过滤。静音检查由调用方负责。返回的 `text` 由保留片段重新拼接，新增质量指标、词级时间、拒绝片段与处理摘要，现有接口和时间字段保持兼容。
+
+上传表单可传 `strict_filter=false`，保留低置信度、重复、高压缩比或异常长但时间合法的文本，并标记存疑；不传时使用 `ASR_STRICT_FILTER`（默认 `true`，保持严格过滤）。两种模式都会校验时间顺序、明显重叠和音频边界。词级文本无法完整对应片段时，`words` 返回空数组。此开关只控制服务端后处理，不关闭 Whisper 解码器自身的阈值和无语音判断。
+
+示例客户端支持 `transcribe_wait(..., strict_filter=False)`、`transcribe_sync(..., strict_filter=False)`，命令行可加 `--no-strict-filter`；`--strict-filter` 显式开启，省略则跟随服务默认值。
+
+无 GPU 的逻辑测试：`python -m unittest discover -s tests -v`。升级后需在 AutoDL 重新验证识别效果和并发显存；`scripts/self_test_asr.py parallel` 和 `scripts/probe_parallel.py` 均使用实际服务端识别流程。
 
 ## 架构
 

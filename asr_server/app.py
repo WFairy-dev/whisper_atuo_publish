@@ -233,6 +233,7 @@ async def submit_asr(
     file: UploadFile = File(...),
     task_id: str = Form(...),
     source_file_path: str = Form(...),
+    strict_filter: Optional[bool] = Form(None),
 ):
     """上传音频或视频。file 是文件内容，source_file_path 只记下调用方路径。"""
     tmp_path, suffix, original_name, size = await _save_upload(file)
@@ -240,6 +241,7 @@ async def submit_asr(
         task = engine.submit_file(
             tmp_path,
             suffix,
+            strict_filter=strict_filter,
             task_id=task_id,
             source_file_path=source_file_path,
             original_name=original_name,
@@ -304,6 +306,7 @@ async def sync_asr(
     file: UploadFile = File(...),
     task_id: str = Form(...),
     source_file_path: str = Form(...),
+    strict_filter: Optional[bool] = Form(None),
 ):
     """上传后阻塞直到转写完成（短任务/调试；高并发请用异步接口）。"""
     tmp_path, suffix, original_name, size = await _save_upload(file)
@@ -311,6 +314,7 @@ async def sync_asr(
         task = engine.submit_file(
             tmp_path,
             suffix,
+            strict_filter=strict_filter,
             task_id=task_id,
             source_file_path=source_file_path,
             original_name=original_name,

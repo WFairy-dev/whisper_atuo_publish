@@ -475,6 +475,7 @@ def _server_running() -> bool:
 def _parallel_worker(path: str, model_name: str, model_dir: str, device: str, ready, start, out) -> None:
     try:
         import whisper
+        from asr_server.infer_worker import transcribe_file
 
         t0 = time.time()
         model = whisper.load_model(model_name, device=device, download_root=model_dir)
@@ -483,7 +484,7 @@ def _parallel_worker(path: str, model_name: str, model_dir: str, device: str, re
             out.put({"ok": False, "error": "等待开始超时"})
             return
         t1 = time.time()
-        whisper_result = model.transcribe(path, verbose=None)
+        whisper_result = transcribe_file(model, path)
         text = str(whisper_result.get("text") or "").strip()
         out.put(
             {

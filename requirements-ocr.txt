@@ -1,0 +1,9 @@
+# 飞桨 GPU 轮子不在公共包索引里。安装时保留下面这一行，否则会装到不能用的旧包。
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+
+paddlepaddle-gpu==3.3.0
+paddleocr==3.7.0
+fastapi
+uvicorn
+python-multipart
+httpx

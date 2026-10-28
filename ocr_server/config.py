@@ -6,7 +6,7 @@ from pathlib import Path
 
 HOST = os.getenv("OCR_HOST", "0.0.0.0")
 PORT = int(os.getenv("OCR_PORT", "6008"))
-SERVICE_VERSION = "1.1.0"
+SERVICE_VERSION = "1.3.0"
 
 MODEL_DIR = Path(os.getenv("OCR_MODEL_DIR", "/root/autodl-tmp/models/ocr"))
 DET_MODEL_NAME = os.getenv("OCR_DET_MODEL_NAME", "PP-OCRv6_small_det")

@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import config
-from .crop import crop_quad
+from .chars import char_spans, rect_boxes
+from .crop import prepare_line, project_spans
 
 log = logging.getLogger("ocr_server.runtime")
 
@@ -86,23 +87,60 @@ def detect_images(model: Any, images: list[Any]) -> list[list[dict[str, Any]]]:
     return boxes_per_image
 
 
+def _aspect(image: Any) -> float:
+    height, width = image.shape[:2]
+    return float(width) / float(height)
+
+
+def _text_and_info(raw: Any) -> tuple[str, Any]:
+    if (
+        isinstance(raw, (list, tuple))
+        and len(raw) == 2
+        and isinstance(raw[1], (list, tuple))
+        and len(raw[1]) >= 4
+    ):
+        return str(raw[0] or ""), raw[1]
+    return str(raw or ""), None
+
+
 def recognize_crops(model: Any, specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    lines: list[Any] = []
     crops = []
     for spec in specs:
         box = spec.get("box")
         if box is None:
+            lines.append(None)
             crops.append(spec["image"])
             continue
         points = box.get("points") if isinstance(box, dict) else box
-        crops.append(crop_quad(spec["image"], points))
-    outputs = list(model.predict(crops, batch_size=len(crops)))
+        line = prepare_line(spec["image"], points)
+        lines.append(line)
+        crops.append(line.image)
+    # 模型内部按宽高比给字符位置配比例。先按同样顺序送入，返回后再排回原顺序。
+    order = sorted(range(len(crops)), key=lambda index: (_aspect(crops[index]), index))
+    ordered = [crops[index] for index in order]
+    outputs = list(model.predict(ordered, batch_size=len(ordered), return_word_box=True))
     if len(outputs) != len(specs):
         raise RuntimeError(f"识别结果数量不符: 期望 {len(specs)} 实际 {len(outputs)}")
+    restored: list[Any] = [None] * len(specs)
+    for index, output in zip(order, outputs):
+        restored[index] = output
     results = []
-    for output in outputs:
+    for line, source, output in zip(lines, crops, restored):
         payload = _payload(output)
+        text, info = _text_and_info(payload.get("rec_text"))
+        view = line.image if line is not None else source
+        height, width = view.shape[:2]
+        spans = char_spans(text, info, width)
+        if spans is None:
+            chars = None
+        elif line is not None:
+            chars = project_spans(line, spans)
+        else:
+            chars = rect_boxes(width, height, spans)
         results.append({
-            "text": str(payload.get("rec_text") or ""),
+            "text": text,
             "score": round(float(payload.get("rec_score") or 0.0), 6),
+            "chars": chars,
         })
     return results

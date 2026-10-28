@@ -73,6 +73,30 @@ def _points(box: Any) -> list[list[float]] | None:
     return [[float(point[0]), float(point[1])] for point in raw]
 
 
+def _chars(value: Any) -> list[dict[str, Any]] | None:
+    raw = value.get("chars") if isinstance(value, dict) else None
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return None
+    chars = []
+    for item in raw:
+        if not isinstance(item, dict):
+            return None
+        text = item.get("text")
+        index = item.get("index")
+        if not isinstance(text, str) or len(text) != 1:
+            return None
+        if isinstance(index, bool) or not isinstance(index, int):
+            return None
+        chars.append({
+            "text": text,
+            "index": index,
+            "box": _points(item.get("box")),
+        })
+    return chars
+
+
 def _det_score(box: Any) -> float | None:
     if isinstance(box, dict) and box.get("det_score") is not None:
         return float(box["det_score"])
@@ -179,6 +203,7 @@ def recognize_images(
             "text": str(value.get("text") or ""),
             "score": float(value.get("score") or 0.0),
             "box": _points(spec["box"]),
+            "chars": _chars(value),
         }
         det_score = _det_score(spec["box"])
         if det_score is not None:

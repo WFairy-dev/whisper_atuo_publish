@@ -39,6 +39,9 @@ AutoDL 本服务（GPU 跑 Whisper turbo）
 | `client_example.py` | 内网侧调用示例（伪同步） |
 | `scripts/start_asr.sh` | AutoDL 启动脚本 |
 | `scripts/bench_asr.py` | 并发压测 |
+| `ocr_server/` | 文字识别服务（PP-OCRv6_small，单独进程） |
+| `scripts/start_ocr.sh` | 文字识别启动脚本，默认端口 6008 |
+| `ocr_client_example.py` | 一次提交一组图片的调用示例 |
 | `docs/操作说明.md` | **完整操作手册（请先看这个）** |
 
 ## 快速开始（AutoDL）
@@ -97,6 +100,15 @@ segments = result["result"]["segments"]
 
 鉴权请求头：`X-API-Key: <密钥>`
 
-对接请看 **[docs/接口文档.md](docs/接口文档.md)**（基本信息、请求参数、请求示例、同步/异步响应、错误码）。
+文字识别是旁边的服务，默认端口 `6008`。接口和语音一样：提交任务号、查询、取消、同步等待。图片字段名是可重复的 `file`。
+
+```bash
+bash scripts/start_ocr.sh
+python ocr_client_example.py frame_001.jpg frame_002.jpg \
+  --source D:/视频/a.mp4 \
+  --url http://127.0.0.1:6008 --api-key "$ASR_API_KEY"
+```
+
+对接请看 **[docs/接口文档.md](docs/接口文档.md)**（基本信息、请求参数、请求示例、同步/异步响应、错误码；文字识别见第 8 节）。
 
 更细的步骤、环境变量、排障与压测见 **[docs/操作说明.md](docs/操作说明.md)**。

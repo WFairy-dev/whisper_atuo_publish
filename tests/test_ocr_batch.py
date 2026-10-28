@@ -35,6 +35,7 @@ class BatchTests(unittest.TestCase):
         self.assertEqual([item["index"] for item in items], [0, 1, 2, 3, 4])
         self.assertEqual([item["text"] for item in items], ["字0", "字1", "字2", "字3", "字4"])
         self.assertEqual(items[0]["boxes"][0]["box"], [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]])
+        self.assertIsNone(items[0]["boxes"][0]["chars"])
 
     def test_one_detection_failure_keeps_the_rest(self) -> None:
         def detect(batch):
@@ -132,6 +133,44 @@ class BatchTests(unittest.TestCase):
         )
         self.assertEqual(items[0]["text"], "仅识别")
         self.assertIsNone(items[0]["boxes"][0]["box"])
+        self.assertIsNone(items[0]["boxes"][0]["chars"])
+
+    def test_chars_are_kept_on_the_line(self) -> None:
+        def recognize(specs):
+            return [{
+                "text": "你好",
+                "score": 0.9,
+                "chars": [
+                    {"text": "你", "index": 0, "box": [[0, 0], [1, 0], [1, 1], [0, 1]]},
+                    {"text": "好", "index": 1, "box": [[1, 0], [2, 0], [2, 1], [1, 1]]},
+                ],
+            } for _ in specs]
+
+        items = recognize_images(
+            ["page"],
+            mode="det_rec",
+            det_batch=1,
+            rec_batch=1,
+            detect=lambda batch: [[[[0, 0], [2, 0], [2, 1], [0, 1]]] for _ in batch],
+            recognize=recognize,
+        )
+        self.assertEqual(
+            [item["text"] for item in items[0]["boxes"][0]["chars"]],
+            ["你", "好"],
+        )
+        self.assertEqual(items[0]["boxes"][0]["chars"][1]["box"][1], [2.0, 0.0])
+        self.assertEqual(items[0]["boxes"][0]["chars"][1]["index"], 1)
+
+    def test_unavailable_chars_stay_null(self) -> None:
+        items = recognize_images(
+            ["page"],
+            mode="det_rec",
+            det_batch=1,
+            rec_batch=1,
+            detect=lambda batch: [[[[0, 0], [2, 0], [2, 1], [0, 1]]] for _ in batch],
+            recognize=lambda specs: [{"text": "你好", "score": 0.9, "chars": None} for _ in specs],
+        )
+        self.assertIsNone(items[0]["boxes"][0]["chars"])
 
     def test_similar_widths_share_a_batch(self) -> None:
         seen: list[list[float]] = []

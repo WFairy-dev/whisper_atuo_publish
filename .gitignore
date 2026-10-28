@@ -1,6 +1,9 @@
 asr_server/tmp/
 asr_server/results/
 asr_server/logs/
+ocr_server/tmp/
+ocr_server/results/
+ocr_server/logs/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/

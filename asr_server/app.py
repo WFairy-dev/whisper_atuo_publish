@@ -228,20 +228,38 @@ def _reject_upload(path: Path) -> None:
         pass
 
 
+def _parse_strict_filter(raw: Optional[str]) -> Optional[bool]:
+    """表单布尔不能直接声明。框架会把省略的布尔字段当成 false，从而盖掉服务默认值。"""
+    if raw is None or not raw.strip():
+        return None
+    value = raw.strip().lower()
+    if value in ("true", "1"):
+        return True
+    if value in ("false", "0"):
+        return False
+    raise _http_error(
+        422,
+        "INVALID_REQUEST",
+        "strict_filter 只能是 true、false、1、0；省略或留空则使用服务默认值",
+        retryable=False,
+    )
+
+
 @app.post("/v1/asr", dependencies=[Depends(verify_api_key)])
 async def submit_asr(
     file: UploadFile = File(...),
     task_id: str = Form(...),
     source_file_path: str = Form(...),
-    strict_filter: Optional[bool] = Form(None),
+    strict_filter: Optional[str] = Form(None),
 ):
     """上传音频或视频。file 是文件内容，source_file_path 只记下调用方路径。"""
+    use_strict_filter = _parse_strict_filter(strict_filter)
     tmp_path, suffix, original_name, size = await _save_upload(file)
     try:
         task = engine.submit_file(
             tmp_path,
             suffix,
-            strict_filter=strict_filter,
+            strict_filter=use_strict_filter,
             task_id=task_id,
             source_file_path=source_file_path,
             original_name=original_name,
@@ -306,15 +324,16 @@ async def sync_asr(
     file: UploadFile = File(...),
     task_id: str = Form(...),
     source_file_path: str = Form(...),
-    strict_filter: Optional[bool] = Form(None),
+    strict_filter: Optional[str] = Form(None),
 ):
     """上传后阻塞直到转写完成（短任务/调试；高并发请用异步接口）。"""
+    use_strict_filter = _parse_strict_filter(strict_filter)
     tmp_path, suffix, original_name, size = await _save_upload(file)
     try:
         task = engine.submit_file(
             tmp_path,
             suffix,
-            strict_filter=strict_filter,
+            strict_filter=use_strict_filter,
             task_id=task_id,
             source_file_path=source_file_path,
             original_name=original_name,

@@ -7,17 +7,27 @@ from unittest.mock import AsyncMock, Mock, patch
 from fastapi.testclient import TestClient
 
 from asr_server import config
-from asr_server.app import app
+from asr_server.app import _parse_strict_filter, app
 from asr_server.engine import AsrEngine, Lane
 from client_example import _upload_form
 
 
 class FilterContractTests(unittest.TestCase):
+    def test_blank_filter_means_unspecified(self):
+        self.assertIsNone(_parse_strict_filter(None))
+        self.assertIsNone(_parse_strict_filter(""))
+        self.assertIsNone(_parse_strict_filter("  "))
+        self.assertIs(_parse_strict_filter(" TRUE "), True)
+        self.assertIs(_parse_strict_filter("0"), False)
+
     def test_both_upload_endpoints_forward_optional_filter(self):
         # No context manager: skip the production startup/model-loading lifecycle.
         client = TestClient(app)
         for endpoint in ("/v1/asr", "/v1/asr/sync"):
-            for value, expected in (("false", False), ("true", True), (None, None)):
+            for value, expected in (
+                ("false", False), ("true", True), ("0", False), ("1", True),
+                (" TRUE ", True), ("", None), (None, None),
+            ):
                 with self.subTest(endpoint=endpoint, value=value), patch("asr_server.app.engine") as engine, \
                         patch("asr_server.app._save_upload", new_callable=AsyncMock) as save, \
                         patch.object(config, "API_KEY", ""):
@@ -31,11 +41,15 @@ class FilterContractTests(unittest.TestCase):
                     self.assertIs(engine.submit_file.call_args.kwargs["strict_filter"], expected)
 
     def test_invalid_filter_rejected_before_upload_save(self):
-        with patch("asr_server.app._save_upload", new_callable=AsyncMock) as save, patch.object(config, "API_KEY", ""):
-            response = TestClient(app).post("/v1/asr", data={"task_id": "test", "source_file_path": "D:/sample.wav",
-                "strict_filter": "invalid"}, files={"file": ("sample.wav", b"audio")})
-            self.assertEqual(response.status_code, 422)
-            save.assert_not_called()
+        client = TestClient(app)
+        for endpoint in ("/v1/asr", "/v1/asr/sync"):
+            with self.subTest(endpoint=endpoint), patch("asr_server.app._save_upload", new_callable=AsyncMock) as save, \
+                    patch.object(config, "API_KEY", ""):
+                response = client.post(endpoint, data={"task_id": "test", "source_file_path": "D:/sample.wav",
+                    "strict_filter": "invalid"}, files={"file": ("sample.wav", b"audio")})
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertEqual(response.json()["error"]["error_code"], "INVALID_REQUEST")
+                save.assert_not_called()
 
     def test_queue_preserves_effective_option(self):
         for default in (True, False):

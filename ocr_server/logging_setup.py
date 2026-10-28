@@ -65,8 +65,9 @@ def setup_logging() -> None:
         stream.setFormatter(fmt)
         named.addHandler(stream)
     named.info(
-        "服务启动 pid=%s det_batch=%s rec_batch=%s log_dir=%s",
+        "服务启动 pid=%s workers=%s det_batch=%s rec_batch=%s log_dir=%s",
         os.getpid(),
+        config.MAX_WORKERS,
         config.DET_BATCH,
         config.REC_BATCH,
         log_dir,

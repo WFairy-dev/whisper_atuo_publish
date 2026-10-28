@@ -131,6 +131,36 @@ class TaskFlowTests(unittest.TestCase):
         self.assertEqual(again.status, "completed")
         self.assertIsNot(again, task)
 
+    def test_two_lanes_keep_each_task_on_one_lane(self) -> None:
+        left_a = Path(self.tmp.name) / "left_a.jpg"
+        left_b = Path(self.tmp.name) / "left_b.jpg"
+        right_a = Path(self.tmp.name) / "right_a.jpg"
+        right_b = Path(self.tmp.name) / "right_b.jpg"
+        for path in (left_a, left_b, right_a, right_b):
+            path.write_bytes(b"img")
+        seen: dict[int, list[str]] = {}
+        lock = threading.Lock()
+        both = threading.Barrier(2)
+
+        def detect(batch):
+            ident = threading.get_ident()
+            with lock:
+                seen.setdefault(ident, []).extend(batch)
+            both.wait(timeout=2)
+            return [[] for _ in batch]
+
+        self.engine.start_for_test(detect, lambda specs: [], read=lambda path: path.name, lanes=2)
+        first = self._submit("lane_left", [left_a, left_b])
+        second = self._submit("lane_right", [right_a, right_b])
+        self.assertTrue(first.done_event.wait(3))
+        self.assertTrue(second.done_event.wait(3))
+        self.assertEqual(first.status, "completed")
+        self.assertEqual(second.status, "completed")
+        self.assertNotEqual(first.lane_id, second.lane_id)
+        self.assertEqual({first.lane_id, second.lane_id}, {0, 1})
+        groups = [sorted(names) for names in seen.values()]
+        self.assertEqual(sorted(groups), [["left_a.jpg", "left_b.jpg"], ["right_a.jpg", "right_b.jpg"]])
+
     def test_missing_cancel_and_full_queue(self) -> None:
         self.assertIsNone(self.engine.cancel("req_missing"))
         old = config.MAX_QUEUE_SIZE

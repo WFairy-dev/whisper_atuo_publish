@@ -11,7 +11,7 @@ def main() -> None:
         "ocr_server.app:app",
         host=config.HOST,
         port=config.PORT,
-        workers=1,  # 模型只加载一份，必须单进程
+        workers=1,  # 对外仍是一个进程；识别路数由引擎另开子进程
         log_level="info",
     )
 

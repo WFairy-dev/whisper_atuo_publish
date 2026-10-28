@@ -1,8 +1,12 @@
-"""一组图片排队，由一条执行线按批计算。取消只停这一组，不关掉模型。"""
+"""一组图片进一条共享队列。空闲的那一路领走队首任务，并在该路内部按批计算。
+
+取消只停这一组：当前这一小批算完后停下，模型留在显存里，这一路继续领下一个任务。
+"""
 from __future__ import annotations
 
 import json
 import logging
+import multiprocessing as mp
 import shutil
 import subprocess
 import threading
@@ -10,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from queue import Empty
 from typing import Any, Optional
 
 from . import config
@@ -132,8 +137,32 @@ class Task:
     result: Optional[dict[str, Any]] = None
     error: Optional[str] = None
     queue_len_at_start: Optional[int] = None
+    lane_id: Optional[int] = None
     cancel_requested: bool = False
     done_event: threading.Event = field(default_factory=threading.Event)
+
+
+@dataclass
+class Lane:
+    """一路识别：生产环境是独立进程里的一套模型，单测是同进程里的一条执行线。"""
+
+    lane_id: int
+    ready_event: threading.Event = field(default_factory=threading.Event)
+    busy: bool = False
+    loaded: bool = False
+    inflight_id: Optional[str] = None
+    thread: Optional[threading.Thread] = None
+    proc: Any = None
+    cancel_event: Any = None
+    proc_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def current_proc(self) -> Any:
+        with self.proc_lock:
+            return self.proc
+
+    def set_proc(self, proc: Any) -> None:
+        with self.proc_lock:
+            self.proc = proc
 
 
 def _compact_json(payload: dict[str, Any]) -> str:
@@ -151,13 +180,25 @@ def _with_previous_status(payload: dict[str, Any], previous: str) -> dict[str, A
     return ordered
 
 
-def _log_end(payload: dict[str, Any]) -> None:
+def _log_end(payload: dict[str, Any], lane: Optional[int] = None) -> None:
     task_id = payload.get("task_id")
     body = _compact_json(payload)
+    lane_text = "-" if lane is None else str(lane)
     if payload.get("status_name") == "failed":
-        log.error("【结束】 task_id=%s 返回参数=%s", task_id, body)
+        log.error("【结束】 lane=%s task_id=%s 返回参数=%s", lane_text, task_id, body)
     else:
-        log.info("【结束】 task_id=%s 返回参数=%s", task_id, body)
+        log.info("【结束】 lane=%s task_id=%s 返回参数=%s", lane_text, task_id, body)
+
+
+def _abandon_queue(q: Any) -> None:
+    try:
+        q.close()
+    except Exception:
+        pass
+    try:
+        q.cancel_join_thread()
+    except Exception:
+        pass
 
 
 def _gpu_mem() -> Optional[dict[str, float]]:
@@ -216,55 +257,89 @@ class OcrEngine:
         self._accepting = False
         self._stop = threading.Event()
         self._wake = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._lanes: list[Lane] = []
+        self._mp: Any = None
         self._cleanup_thread: Optional[threading.Thread] = None
         self._detect = None
         self._recognize = None
         self._read = read_image
 
     def start(self) -> None:
-        from .runtime import detect_images, load_models, recognize_crops
-
         removed = _purge_temp_dir()
         if removed:
             log.info("启动清理临时文件 %d 个", removed)
         purged = result_store.purge_expired()
         if purged:
             log.info("启动清理过期结果 %d 个", purged)
-        detector, recognizer = load_models()
-        self._detect = lambda images: detect_images(detector, images)
-        self._recognize = lambda specs: recognize_crops(recognizer, specs)
-        self._loaded = True
-        self._accepting = True
-        self._thread = threading.Thread(target=self._loop, name="ocr-infer", daemon=True)
-        self._thread.start()
+        if config.WORKERS_REQUESTED != config.MAX_WORKERS:
+            log.warning(
+                "配置的识别路数=%s 超过本机上限 %s，已按 %s 路启动",
+                config.WORKERS_REQUESTED,
+                config.MAX_WORKERS,
+                config.MAX_WORKERS,
+            )
+        self._mp = mp.get_context("spawn")
+        self._lanes = [Lane(lane_id=i) for i in range(config.MAX_WORKERS)]
+        for lane in self._lanes:
+            lane.thread = threading.Thread(
+                target=self._process_lane_loop,
+                args=(lane,),
+                name=f"ocr-lane-{lane.lane_id}",
+                daemon=True,
+            )
+            lane.thread.start()
         self._cleanup_thread = threading.Thread(target=self._cleanup_loop, name="ocr-cleanup", daemon=True)
         self._cleanup_thread.start()
+        deadline = time.time() + 300
+        for lane in self._lanes:
+            remain = deadline - time.time()
+            if remain <= 0 or not lane.ready_event.wait(timeout=remain):
+                log.error("第 %d 路推理未能在时限内就绪", lane.lane_id)
+                self.stop()
+                raise RuntimeError("推理进程未能在 300 秒内就绪")
+        self._loaded = True
+        self._accepting = True
         log.info(
-            "文字识别就绪 det_batch=%d rec_batch=%d queue_max=%d",
+            "文字识别就绪 workers=%d det_batch=%d rec_batch=%d queue_max=%d",
+            config.MAX_WORKERS,
             config.DET_BATCH,
             config.REC_BATCH,
             config.MAX_QUEUE_SIZE,
         )
 
-    def start_for_test(self, detect, recognize, read=None) -> None:
-        """单测注入检测和识别，不加载模型。"""
+    def start_for_test(self, detect, recognize, read=None, lanes: Optional[int] = None) -> None:
+        """单测注入检测和识别，不加载模型。默认路数与正式配置相同。"""
+        count = config.MAX_WORKERS if lanes is None else max(1, int(lanes))
         self._detect = detect
         self._recognize = recognize
         if read is not None:
             self._read = read
+        self._lanes = [Lane(lane_id=index) for index in range(count)]
+        for lane in self._lanes:
+            lane.loaded = True
+            lane.ready_event.set()
+            lane.thread = threading.Thread(
+                target=self._test_lane_loop,
+                args=(lane,),
+                name=f"ocr-test-{lane.lane_id}",
+                daemon=True,
+            )
+            lane.thread.start()
         self._loaded = True
         self._accepting = True
-        self._thread = threading.Thread(target=self._loop, name="ocr-infer-test", daemon=True)
-        self._thread.start()
 
     def stop(self) -> None:
         self._accepting = False
         self._stop.set()
         self._wake.set()
-        thread = self._thread
-        if thread is not None and thread.is_alive() and threading.current_thread() is not thread:
-            thread.join(timeout=10)
+        for lane in self._lanes:
+            self._kill_proc(lane.current_proc())
+        for lane in self._lanes:
+            thread = lane.thread
+            if thread is not None and thread.is_alive() and threading.current_thread() is not thread:
+                thread.join(timeout=10)
+        for lane in self._lanes:
+            self._kill_proc(lane.current_proc())
         with self._lock:
             pending = list(self._queue)
             self._queue.clear()
@@ -355,12 +430,15 @@ class OcrEngine:
                 payload = _with_previous_status(self.task_to_dict(task), "queued")
             elif task.status == "running":
                 task.cancel_requested = True
+                lane = self._lane_of(task.lane_id)
+                if lane is not None and lane.cancel_event is not None:
+                    lane.cancel_event.set()
                 self._mark_cancelled_locked(task)
                 payload = _with_previous_status(self.task_to_dict(task), "running")
             else:
                 raise TaskAlreadyFinished(task.status)
 
-        _log_end(payload)
+        _log_end(payload, lane=task.lane_id)
         for path in paths:
             self._cleanup_file(path)
         return payload
@@ -416,13 +494,15 @@ class OcrEngine:
             in_memory = len(self._tasks)
         return {
             "service_version": config.SERVICE_VERSION,
-            "model_loaded": self._loaded,
+            "model_loaded": self._model_loaded(),
             "det_model": config.DET_MODEL_NAME,
             "rec_model": config.REC_MODEL_NAME,
             "device": config.DEVICE,
             "engine": config.ENGINE_NAME,
             "cuda_available": gpu_mem is not None,
             "accepting": self._accepting,
+            "max_workers": config.MAX_WORKERS,
+            "ready_workers": self._ready_workers(),
             "det_batch": config.DET_BATCH,
             "rec_batch": config.REC_BATCH,
             "max_images": config.MAX_IMAGES,
@@ -471,7 +551,20 @@ class OcrEngine:
         except Exception:
             log.exception("结果落盘失败 task_id=%s", task.task_id)
 
-    def _take(self) -> Optional[Task]:
+    def _ready_workers(self) -> int:
+        return sum(1 for lane in self._lanes if lane.loaded)
+
+    def _model_loaded(self) -> bool:
+        if self._lanes:
+            return self._ready_workers() > 0
+        return self._loaded
+
+    def _lane_of(self, lane_id: Optional[int]) -> Optional[Lane]:
+        if lane_id is None or lane_id < 0 or lane_id >= len(self._lanes):
+            return None
+        return self._lanes[lane_id]
+
+    def _take(self, lane_id: int) -> Optional[Task]:
         with self._lock:
             while self._queue:
                 task = self._queue.pop(0)
@@ -479,27 +572,36 @@ class OcrEngine:
                     continue
                 task.status = "running"
                 task.started_at = time.time()
+                task.lane_id = lane_id
                 task.queue_len_at_start = len(self._queue)
                 self._running += 1
                 return task
             return None
 
-    def _loop(self) -> None:
+    def _test_lane_loop(self, lane: Lane) -> None:
         while not self._stop.is_set():
-            task = self._take()
+            task = self._take(lane.lane_id)
             if task is None:
-                self._wake.wait(0.2)
+                self._wake.wait(0.05)
                 self._wake.clear()
                 continue
-            self._run_task(task)
+            lane.busy = True
+            lane.inflight_id = task.task_id
+            try:
+                self._run_task(task)
+            finally:
+                lane.busy = False
+                lane.inflight_id = None
 
-    def _run_task(self, task: Task) -> None:
+    def _log_start(self, task: Task) -> None:
         log.info(
-            "【开始】 task_id=%s 请求参数=%s",
+            "【开始】 lane=%s task_id=%s 请求参数=%s",
+            task.lane_id,
             task.task_id,
             _compact_json(
                 {
                     "task_id": task.task_id,
+                    "lane": task.lane_id,
                     "source_file_path": task.source_file_path,
                     "file_size_bytes": task.file_size,
                     "image_count": task.image_count,
@@ -510,6 +612,9 @@ class OcrEngine:
                 }
             ),
         )
+
+    def _run_task(self, task: Task) -> None:
+        self._log_start(task)
         try:
             items = self._recognize_task(task)
             self._finish_completed(task, items)
@@ -519,10 +624,13 @@ class OcrEngine:
             log.exception("识别失败 task_id=%s", task.task_id)
             self._finish_failed(task, str(exc))
         finally:
-            with self._lock:
-                self._running = max(0, self._running - 1)
-            self._cleanup_files(task)
-            task.done_event.set()
+            self._release_task(task)
+
+    def _release_task(self, task: Task) -> None:
+        with self._lock:
+            self._running = max(0, self._running - 1)
+        self._cleanup_files(task)
+        task.done_event.set()
 
     def _cancelled(self, task: Task) -> bool:
         return task.cancel_requested or task.status == "cancelled"
@@ -585,13 +693,14 @@ class OcrEngine:
         self._persist_payload(task, payload)
         ok_count = sum(1 for item in items if item.get("ok"))
         log.info(
-            "识别完成 task_id=%s mode=%s images=%d ok=%d",
+            "识别完成 lane=%s task_id=%s mode=%s images=%d ok=%d",
+            task.lane_id,
             task.task_id,
             task.mode,
             task.image_count,
             ok_count,
         )
-        _log_end(payload)
+        _log_end(payload, lane=task.lane_id)
 
     def _finish_failed(self, task: Task, message: str) -> None:
         with self._lock:
@@ -604,7 +713,7 @@ class OcrEngine:
             task.result = None
             payload = self.task_to_dict(task)
         self._persist_payload(task, payload)
-        _log_end(payload)
+        _log_end(payload, lane=task.lane_id)
 
     def _finish_cancelled_by_worker(self, task: Task) -> None:
         with self._lock:
@@ -612,7 +721,200 @@ class OcrEngine:
                 return
             self._mark_cancelled_locked(task)
             payload = self.task_to_dict(task)
-        _log_end(payload)
+        _log_end(payload, lane=task.lane_id)
+
+    def _requeue_front(self, task: Task) -> None:
+        with self._lock:
+            if task.status != "running":
+                return
+            task.status = "queued"
+            task.started_at = None
+            task.lane_id = None
+            task.queue_len_at_start = None
+            if task not in self._queue:
+                self._queue.insert(0, task)
+            self._running = max(0, self._running - 1)
+        log.info("任务放回队首 task_id=%s", task.task_id)
+
+    def _kill_proc(self, proc: Any) -> None:
+        if proc is None:
+            return
+        try:
+            alive = proc.is_alive()
+        except ValueError:
+            return
+        if not alive:
+            try:
+                proc.join(timeout=1)
+            except Exception:
+                pass
+            return
+        log.info("结束推理进程 pid=%s", getattr(proc, "pid", None))
+        try:
+            proc.kill()
+        except Exception:
+            log.exception("结束推理进程失败")
+        try:
+            proc.join(timeout=10)
+        except Exception:
+            log.exception("等待推理进程结束失败")
+
+    def _spawn_child(self, lane: Lane) -> tuple[Any, Any, Any]:
+        from .infer_worker import worker_main
+
+        assert self._mp is not None
+        job_q = self._mp.Queue()
+        result_q = self._mp.Queue()
+        cancel_event = self._mp.Event()
+        proc = self._mp.Process(
+            target=worker_main,
+            args=(job_q, result_q, cancel_event),
+            name=f"ocr-infer-{lane.lane_id}",
+            daemon=False,
+        )
+        lane.cancel_event = cancel_event
+        proc.start()
+        lane.set_proc(proc)
+        log.info("推理进程已启动 lane=%d pid=%s", lane.lane_id, proc.pid)
+        return job_q, result_q, proc
+
+    def _try_dispatch(self, lane: Lane, job_q: Any, proc: Any) -> None:
+        if self._stop.is_set() or lane.busy:
+            return
+        try:
+            alive = proc.is_alive()
+        except ValueError:
+            return
+        if not alive:
+            return
+        if lane.cancel_event is not None:
+            lane.cancel_event.clear()
+        task = self._take(lane.lane_id)
+        if task is None:
+            return
+        if self._stop.is_set():
+            self._requeue_front(task)
+            return
+        lane.busy = True
+        lane.inflight_id = task.task_id
+        self._log_start(task)
+        try:
+            job_q.put(
+                {
+                    "task_id": task.task_id,
+                    "paths": [str(path) for path in task.file_paths],
+                    "mode": task.mode,
+                    "det_batch": config.DET_BATCH,
+                    "rec_batch": config.REC_BATCH,
+                },
+                timeout=10,
+            )
+        except Exception as exc:
+            lane.busy = False
+            lane.inflight_id = None
+            self._finish_failed(task, f"下发识别失败: {exc}")
+            self._release_task(task)
+
+    def _handle_result(self, lane: Lane, msg: dict[str, Any]) -> None:
+        task_id = str(msg.get("task_id", ""))
+        with self._lock:
+            task = self._tasks.get(task_id)
+        if task is None:
+            log.info("忽略过期识别结果 lane=%d task_id=%s", lane.lane_id, task_id)
+            return
+        if msg.get("cancelled"):
+            self._finish_cancelled_by_worker(task)
+        elif msg.get("ok"):
+            self._finish_completed(task, list(msg.get("items") or []))
+        else:
+            self._finish_failed(task, str(msg.get("error") or "识别失败"))
+        self._release_task(task)
+
+    def _on_lane_death(self, lane: Lane) -> None:
+        inflight_id = lane.inflight_id
+        lane.busy = False
+        lane.inflight_id = None
+        lane.loaded = False
+        with self._lock:
+            task = self._tasks.get(inflight_id) if inflight_id else None
+        if task is not None and task.status == "running":
+            self._requeue_front(task)
+
+    def _drop_inflight_on_stop(self, lane: Lane) -> None:
+        inflight_id = lane.inflight_id
+        lane.busy = False
+        lane.inflight_id = None
+        with self._lock:
+            task = self._tasks.get(inflight_id) if inflight_id else None
+        if task is not None and task.status == "running":
+            self._finish_failed(task, "服务正在退出")
+            self._release_task(task)
+
+    def _process_lane_loop(self, lane: Lane) -> None:
+        while not self._stop.is_set():
+            lane.loaded = False
+            try:
+                job_q, result_q, proc = self._spawn_child(lane)
+            except Exception:
+                log.exception("无法启动推理进程 lane=%d", lane.lane_id)
+                if self._stop.wait(3):
+                    return
+                continue
+            got_ready = False
+            try:
+                while not self._stop.is_set():
+                    try:
+                        msg = result_q.get(timeout=0.2)
+                    except Empty:
+                        try:
+                            alive = proc.is_alive()
+                        except ValueError:
+                            alive = False
+                        if not alive:
+                            break
+                        if got_ready and not lane.busy:
+                            self._try_dispatch(lane, job_q, proc)
+                        continue
+                    except (EOFError, OSError):
+                        log.warning("推理进程结果通道已断开 lane=%d", lane.lane_id)
+                        break
+                    kind = msg.get("type")
+                    if kind == "ready":
+                        got_ready = True
+                        lane.loaded = True
+                        lane.ready_event.set()
+                        log.info("推理进程就绪 lane=%d pid=%s", lane.lane_id, proc.pid)
+                        self._try_dispatch(lane, job_q, proc)
+                    elif kind == "fatal":
+                        log.error("推理进程启动失败 lane=%d err=%s", lane.lane_id, msg.get("error"))
+                        break
+                    elif kind == "result":
+                        self._handle_result(lane, msg)
+                        lane.busy = False
+                        lane.inflight_id = None
+                        try:
+                            alive = proc.is_alive()
+                        except ValueError:
+                            alive = False
+                        if alive and not self._stop.is_set():
+                            self._try_dispatch(lane, job_q, proc)
+                    else:
+                        log.warning("忽略未知推理消息 lane=%d kind=%s", lane.lane_id, kind)
+            finally:
+                try:
+                    proc.join(timeout=2)
+                except Exception:
+                    pass
+                _abandon_queue(job_q)
+                _abandon_queue(result_q)
+            if self._stop.is_set():
+                self._drop_inflight_on_stop(lane)
+                break
+            log.warning("第 %d 路推理进程退出，准备重新加载模型", lane.lane_id)
+            self._on_lane_death(lane)
+            if self._stop.wait(0.5 if got_ready else 3.0):
+                self._drop_inflight_on_stop(lane)
+                break
 
     def _persist_payload(self, task: Task, payload: dict[str, Any]) -> None:
         try:

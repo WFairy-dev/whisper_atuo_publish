@@ -6,7 +6,7 @@ from pathlib import Path
 
 HOST = os.getenv("OCR_HOST", "0.0.0.0")
 PORT = int(os.getenv("OCR_PORT", "6008"))
-SERVICE_VERSION = "1.3.0"
+SERVICE_VERSION = "1.4.0"
 
 MODEL_DIR = Path(os.getenv("OCR_MODEL_DIR", "/root/autodl-tmp/models/ocr"))
 DET_MODEL_NAME = os.getenv("OCR_DET_MODEL_NAME", "PP-OCRv6_small_det")
@@ -44,6 +44,23 @@ def _positive_int(env_name: str, file_key: str, default: int) -> int:
 
 DET_BATCH = _positive_int("OCR_DET_BATCH", "det_batch", 8)
 REC_BATCH = _positive_int("OCR_REC_BATCH", "rec_batch", 32)
+
+# 同时识别的路数。每路一份检测模型和一份识别模型。
+# 实测两路能缩短两组同时来的总时间；第 4 路没有测过，超过 3 时按 3 启动。
+_WORKER_LIMIT = 3
+
+
+def _resolve_workers() -> tuple[int, int]:
+    file_value = _read_service_conf().get("workers", "2")
+    raw = os.getenv("OCR_MAX_WORKERS", "").strip() or file_value
+    try:
+        requested = max(1, int(raw))
+    except ValueError:
+        requested = 2
+    return requested, min(requested, _WORKER_LIMIT)
+
+
+WORKERS_REQUESTED, MAX_WORKERS = _resolve_workers()
 
 MAX_IMAGES = max(1, int(os.getenv("OCR_MAX_IMAGES", "32")))
 MAX_IMAGE_BYTES = max(1, int(os.getenv("OCR_MAX_IMAGE_BYTES", str(20 * 1024 * 1024))))

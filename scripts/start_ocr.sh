@@ -27,15 +27,7 @@ fi
 
 PY="${OCR_PYTHON:-/root/autodl-tmp/envs/ocr-pp/bin/python}"
 LOG_ROOT="${OCR_LOG_DIR:-$ROOT/ocr_server/logs}"
-DAY="$(date +%F)"
-STAMP="$(date +%H-%M-%S)"
-mkdir -p "$LOG_ROOT/$DAY"
-RUN_DIR="$LOG_ROOT/$DAY/$STAMP"
-suffix=2
-while ! mkdir "$RUN_DIR" 2>/dev/null; do
-  RUN_DIR="$LOG_ROOT/$DAY/${STAMP}-${suffix}"
-  suffix=$((suffix + 1))
-done
-export OCR_LOG_RUN_DIR="$RUN_DIR"
-exec >>"$RUN_DIR/stdout.log" 2>&1
-exec "$PY" -m ocr_server
+# shellcheck source=supervise.sh
+source "$ROOT/scripts/supervise.sh"
+# 本脚本守着服务。进程自己退出会重新启动；停止时结束本脚本。
+supervise_service "$LOG_ROOT" OCR_LOG_RUN_DIR "文字识别服务" "$PY" -m ocr_server

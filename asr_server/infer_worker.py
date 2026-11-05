@@ -37,14 +37,16 @@ def _ensure_ffmpeg_on_path() -> None:
 
 
 def _setup_child_logging() -> None:
-    """子进程只打到标准错误，避免和父进程同时写同一个日志文件。"""
-    if logging.getLogger().handlers:
-        return
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    """子进程只打到标准错误，避免和父进程同时写同一个业务日志。跨天时跟着切到当天文件。"""
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    from .logging_setup import watch_stdio_day_change
+
+    watch_stdio_day_change()
 
 
 def transcribe_file(model: Any, path: str, *, task_id: str = "",

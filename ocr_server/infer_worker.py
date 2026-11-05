@@ -16,14 +16,16 @@ log = logging.getLogger("ocr_server.infer")
 
 
 def _setup_child_logging() -> None:
-    """子进程打到标准错误。启动脚本会把它和父进程输出写进同一次日志。"""
-    if logging.getLogger().handlers:
-        return
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    """子进程打到标准错误。跨天时跟着切到当天的控制台文件。"""
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    from .logging_setup import watch_stdio_day_change
+
+    watch_stdio_day_change()
 
 
 def _read_image(path: Path) -> Any:

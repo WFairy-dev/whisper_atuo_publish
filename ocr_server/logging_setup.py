@@ -1,17 +1,24 @@
-"""每次启动单独一个目录：logs/年-月-日/时-分-秒/ocr.log。"""
+"""每次启动一个时刻目录：logs/年-月-日/时-分-秒/ocr.log。跨天继续写到新日期下的同一时刻目录。"""
 from __future__ import annotations
 
 import logging
 import os
-import re
-import shutil
+import sys
 import time
 from pathlib import Path
 
 from . import config
 
-_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+import run_log
+
 _run_dir: Path | None = None
+_log_root: Path | None = None
+_run_stamp: str | None = None
+_handler: run_log.DailyRunFileHandler | None = None
 
 
 def allocate_run_dir(root: Path, moment: time.struct_time | None = None) -> Path:
@@ -45,9 +52,38 @@ def resolve_run_log_dir() -> Path:
     return _run_dir
 
 
+def _protected_days() -> set[str]:
+    days = {time.strftime("%Y-%m-%d")}
+    if _handler is not None and _handler.day:
+        days.add(_handler.day)
+    days.update(run_log.stdio_day_names())
+    return days
+
+
+def purge_old_logs() -> int:
+    root = _log_root or config.LOG_DIR
+    return run_log.purge_dated_logs(
+        root,
+        config.LOG_RETENTION_DAYS,
+        protect_days=_protected_days(),
+    )
+
+
+def watch_stdio_day_change() -> None:
+    """推理子进程把控制台输出跟着切到当天，不在子进程里删日志。"""
+    raw = os.getenv("OCR_LOG_RUN_DIR", "").strip()
+    if not raw:
+        return
+    root, stamp = run_log.split_run_location(Path(raw), config.LOG_DIR)
+    run_log.start_stdio_watch(root, stamp)
+
+
 def setup_logging() -> None:
+    global _log_root, _run_stamp, _handler
     config.LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_dir = resolve_run_log_dir()
+    os.environ["OCR_LOG_RUN_DIR"] = str(log_dir)
+    _log_root, _run_stamp = run_log.split_run_location(log_dir, config.LOG_DIR)
     level = getattr(logging, config.LOG_LEVEL, logging.INFO)
     fmt = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -56,37 +92,22 @@ def setup_logging() -> None:
     named = logging.getLogger("ocr_server")
     named.setLevel(level)
     named.propagate = False
-    if not any(isinstance(handler, logging.FileHandler) for handler in named.handlers):
-        file_handler = logging.FileHandler(log_dir / "ocr.log", encoding="utf-8")
-        file_handler.setFormatter(fmt)
-        named.addHandler(file_handler)
+    if _handler is None:
+        start_day = log_dir.parent.name if run_log._DAY_RE.fullmatch(log_dir.parent.name) else None
+        _handler = run_log.DailyRunFileHandler(_log_root, _run_stamp, "ocr.log", day=start_day)
+        _handler.setFormatter(fmt)
+        named.addHandler(_handler)
     if not any(type(handler) is logging.StreamHandler for handler in named.handlers):
         stream = logging.StreamHandler()
         stream.setFormatter(fmt)
         named.addHandler(stream)
+    run_log.start_housekeeping(_log_root, _run_stamp, _handler, purge_old_logs, named)
     named.info(
-        "服务启动 pid=%s workers=%s det_batch=%s rec_batch=%s log_dir=%s",
+        "服务启动 pid=%s workers=%s det_batch=%s rec_batch=%s log_dir=%s retention_days=%s",
         os.getpid(),
         config.MAX_WORKERS,
         config.DET_BATCH,
         config.REC_BATCH,
         log_dir,
+        config.LOG_RETENTION_DAYS,
     )
-
-
-def purge_old_logs() -> int:
-    if not config.LOG_DIR.is_dir():
-        return 0
-    cutoff = time.time() - config.LOG_RETENTION_DAYS * 86400
-    removed = 0
-    for folder in config.LOG_DIR.iterdir():
-        if not folder.is_dir() or not _DAY_RE.fullmatch(folder.name):
-            continue
-        try:
-            if folder.stat().st_mtime >= cutoff:
-                continue
-            shutil.rmtree(folder)
-            removed += 1
-        except OSError:
-            continue
-    return removed

@@ -22,7 +22,7 @@ AutoDL 本服务（GPU 跑 Whisper turbo）
         │
         ├─ 上传音频：用完立即删除
         ├─ 转写结果：落盘保留 24 小时
-        └─ 运行日志：按日期分文件夹，默认保留 3 天
+        └─ 运行日志：按天切分，默认保留 3 天；服务不重启也会删除过期日志
 ```
 
 - **不要**在内网 CPU 上跑 Whisper（会很卡）。
@@ -37,10 +37,10 @@ AutoDL 本服务（GPU 跑 Whisper turbo）
 | `asr_server/results/` | 转写结果 JSON（保留 24 小时） |
 | `asr_server/logs/` | 运行日志 |
 | `client_example.py` | 内网侧调用示例（伪同步） |
-| `scripts/start_asr.sh` | AutoDL 启动脚本 |
+| `scripts/start_asr.sh` | 语音服务启动脚本。进程退出后会自动再启动 |
 | `scripts/bench_asr.py` | 并发压测 |
 | `ocr_server/` | 文字识别服务（PP-OCRv6_small，单独进程） |
-| `scripts/start_ocr.sh` | 文字识别启动脚本，默认端口 6008 |
+| `scripts/start_ocr.sh` | 文字识别启动脚本，默认端口 6008。进程退出后会自动再启动 |
 | `ocr_client_example.py` | 一次提交一组图片的调用示例 |
 | `docs/操作说明.md` | **完整操作手册（请先看这个）** |
 

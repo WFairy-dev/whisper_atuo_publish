@@ -1,7 +1,8 @@
-"""DOVER-Mobile 仅技术支路（清晰度）推理封装。"""
+"""清晰度推理封装：只加载技术支路，默认使用完整模型。"""
 from __future__ import annotations
 
 import logging
+import math
 import sys
 import time
 from pathlib import Path
@@ -14,7 +15,7 @@ log = logging.getLogger("dover_server.clarity")
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _DOVER_ROOT = _PACKAGE_DIR / "DOVER"
-_DEFAULT_OPT = _DOVER_ROOT / "clarity-mobile.yml"
+_DEFAULT_OPT = _DOVER_ROOT / "clarity.yml"
 
 # 保证可 import 上游 dover 包（未 editable 安装时也能用）。
 if str(_DOVER_ROOT) not in sys.path:
@@ -22,6 +23,18 @@ if str(_DOVER_ROOT) not in sys.path:
 
 _MEAN = torch.FloatTensor([123.675, 116.28, 103.53])
 _STD = torch.FloatTensor([58.395, 57.12, 57.375])
+# 完整模型技术支路的标定：原始分中心约 -0.08285，尺度约 0.03774。
+_TECH_CENTER = -0.08285
+_TECH_SCALE = 0.03774
+
+
+def to_positive_score(raw_score: float) -> float:
+    """把技术支路原始分换成 0～1。0.5 大约是普通画质，越高越清晰。"""
+    z = (raw_score - _TECH_CENTER) / _TECH_SCALE
+    if z >= 0:
+        return 1.0 / (1.0 + math.exp(-z))
+    eased = math.exp(z)
+    return eased / (1.0 + eased)
 
 
 class ClarityEvaluator:
@@ -45,7 +58,7 @@ class ClarityEvaluator:
             opt = yaml.safe_load(handle)
 
         self.device = device
-        self.model_name = "DOVER-Mobile"
+        self.model_name = str(opt.get("name") or "DOVER")
         dopt = opt["data"]["clarity"]["args"]
         self._sample_types = dopt["sample_types"]
         if "technical" not in self._sample_types:
@@ -81,13 +94,25 @@ class ClarityEvaluator:
         if not load_path.is_file():
             raise FileNotFoundError(f"找不到权重文件: {load_path}")
         state = torch.load(str(load_path), map_location=self.device)
-        missing, unexpected = self._evaluator.load_state_dict(state, strict=False)
+        # 权重里还带美学支路，这里只灌技术支路，避免把未加载的层记成异常。
+        technical_state = {
+            key: value
+            for key, value in state.items()
+            if key.startswith("technical_")
+        }
+        missing, unexpected = self._evaluator.load_state_dict(technical_state, strict=False)
+        if missing or unexpected:
+            raise RuntimeError(
+                "清晰度权重与网络不匹配 "
+                f"missing={len(missing)} unexpected={len(unexpected)} "
+                f"missing_head={missing[:8]}"
+            )
         log.info(
-            "清晰度模型已加载 path=%s device=%s missing=%d unexpected=%d",
+            "清晰度模型已加载 name=%s path=%s device=%s layers=%d",
+            self.model_name,
             load_path,
             self.device,
-            len(missing),
-            len(unexpected),
+            len(technical_state),
         )
         self._evaluator.eval()
 
@@ -113,10 +138,11 @@ class ClarityEvaluator:
             outputs = self._evaluator(prepared)
         if not outputs:
             raise RuntimeError("模型未返回技术分")
-        technical_score = float(outputs[0].mean().item())
+        raw_score = float(outputs[0].mean().item())
         cost = round(time.time() - started, 3)
         return {
-            "technical_score": technical_score,
+            "technical_score": to_positive_score(raw_score),
+            "technical_raw_score": raw_score,
             "model": self.model_name,
             "device": self.device,
             "cost_time_s": cost,

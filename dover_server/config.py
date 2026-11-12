@@ -10,14 +10,14 @@ SERVICE_VERSION = "0.1.0"
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 DOVER_ROOT = Path(os.getenv("DOVER_ROOT", str(_PACKAGE_DIR / "DOVER")))
-OPT_PATH = Path(os.getenv("DOVER_OPT_PATH", str(DOVER_ROOT / "clarity-mobile.yml")))
+OPT_PATH = Path(os.getenv("DOVER_OPT_PATH", str(DOVER_ROOT / "clarity.yml")))
 WEIGHT_PATH = Path(
     os.getenv(
         "DOVER_WEIGHT_PATH",
-        str(DOVER_ROOT / "pretrained_weights" / "DOVER-Mobile.pth"),
+        str(DOVER_ROOT / "pretrained_weights" / "DOVER.pth"),
     )
 )
-MODEL_NAME = os.getenv("DOVER_MODEL_NAME", "DOVER-Mobile")
+MODEL_NAME = os.getenv("DOVER_MODEL_NAME", "DOVER")
 DEVICE = os.getenv("DOVER_DEVICE", "cpu")
 
 _CONF_PATH = Path(__file__).with_name("service.conf")

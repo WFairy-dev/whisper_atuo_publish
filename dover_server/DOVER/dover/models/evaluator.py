@@ -70,8 +70,8 @@ class DOVER(nn.Module):
             if t_backbone_size == "swin_tiny":
                 b = swin_3d_tiny(**backbone[key])
             elif t_backbone_size == "swin_tiny_grpb":
-                # to reproduce fast-vqa
-                b = VideoBackbone()
+                # 推理关闭梯度检查点，避免同一层在处理器上再算一遍。
+                b = VideoBackbone(use_checkpoint=False)
             elif t_backbone_size == "swin_tiny_grpb_m":
                 # to reproduce fast-vqa-m
                 b = VideoBackbone(window_size=(4, 4, 4), frag_biases=[0, 0, 0, 0])

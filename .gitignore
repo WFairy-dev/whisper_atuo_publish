@@ -11,3 +11,5 @@ __pycache__/
 *.key
 test_video/
 *logs/
+*results/dover_server/DOVER/pretrained_weights/DOVER.pth
+/dover_server/DOVER/pretrained_weights/DOVER.pth

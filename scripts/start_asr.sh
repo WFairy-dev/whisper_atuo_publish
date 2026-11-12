@@ -6,14 +6,15 @@
 # 可选：
 #   同时转写几路：改 asr_server/service.conf 里的 workers，改完重启。
 #   临时覆盖：export ASR_MAX_WORKERS=2
-#   export ASR_PORT=6006
+#   export ASR_PORT=7006   # 本机端口；公网仍走 6006 上的路径代理
 #   export ASR_ENABLE_DOCS=0
+# 对外：AutoDL 6006 → proxy → 本服务 /v1/asr*（探活 /v1/asr/health）
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 export ASR_HOST="${ASR_HOST:-0.0.0.0}"
-export ASR_PORT="${ASR_PORT:-6006}"
+export ASR_PORT="${ASR_PORT:-7006}"
 export ASR_MAX_QUEUE_SIZE="${ASR_MAX_QUEUE_SIZE:-200}"
 export ASR_MODEL_NAME="${ASR_MODEL_NAME:-turbo}"
 export ASR_MODEL_DIR="${ASR_MODEL_DIR:-/root/autodl-tmp/models/whisper}"

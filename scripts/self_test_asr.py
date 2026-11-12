@@ -65,7 +65,7 @@ def _gpu() -> dict[str, Any] | None:
 
 
 def _health(base: str) -> dict[str, Any]:
-    r = httpx.get(f"{base.rstrip('/')}/health", timeout=10)
+    r = httpx.get(f"{base.rstrip('/')}/v1/asr/health", timeout=10)
     r.raise_for_status()
     return r.json()
 

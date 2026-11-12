@@ -62,7 +62,7 @@ def _process_running(snippet: str) -> bool:
 
 def _asr_running() -> int:
     try:
-        with urllib.request.urlopen("http://127.0.0.1:6006/health", timeout=3) as resp:
+        with urllib.request.urlopen("http://127.0.0.1:6006/v1/asr/health", timeout=3) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return 0

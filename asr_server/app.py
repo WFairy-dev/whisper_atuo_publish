@@ -162,9 +162,9 @@ async def handle_validation_error(_request, exc: RequestValidationError):
     )
 
 
-@app.get("/health")
+@app.get("/v1/asr/health")
 def health():
-    """健康检查不强制鉴权，便于监控探活。"""
+    """探活不需要密钥。本机 7006 与经 6006 代理都用这一条。"""
     return engine.stats()
 
 

@@ -60,7 +60,7 @@ bash scripts/start_asr.sh
 健康检查（无需密钥）：
 
 ```bash
-curl http://127.0.0.1:6006/health
+curl http://127.0.0.1:7006/v1/asr/health
 ```
 
 ## 快速调用（公司内网）
@@ -92,7 +92,7 @@ segments = result["result"]["segments"]
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/health` | 健康检查（无需 Key） |
+| `GET` | `/v1/asr/health` | 健康检查（无需 Key） |
 | `POST` | `/v1/asr` | 上传文件，立刻返回 `task_id` |
 | `GET` | `/v1/asr/{task_id}` | 查询状态 / 取结果 |
 | `POST` | `/v1/asr/{task_id}/cancel` | 立刻取消该任务 |

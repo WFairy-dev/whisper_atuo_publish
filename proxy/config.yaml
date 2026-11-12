@@ -1,0 +1,18 @@
+# AutoDL 实例内路由转发（监听 6006，由平台映射到公网）。
+# 文档：https://www.autodl.com/docs/proxy_in_instance/
+# 注意：route_path 须符合 Gin 规则，通配写成 /前缀/*，不能写成 /前缀*
+
+proxies:
+  # 语音：POST /v1/asr 以及 /v1/asr/sync、/v1/asr/{id}、/v1/asr/health 等
+  - host_and_port: http://127.0.0.1:7006
+    route_path: /v1/asr
+
+  - host_and_port: http://127.0.0.1:7006
+    route_path: /v1/asr/*
+
+  # 清晰度：POST /v1/vqa 以及子路径；探活用 /v1/vqa/health
+  - host_and_port: http://127.0.0.1:6009
+    route_path: /v1/vqa
+
+  - host_and_port: http://127.0.0.1:6009
+    route_path: /v1/vqa/*

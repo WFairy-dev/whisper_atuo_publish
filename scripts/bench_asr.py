@@ -84,7 +84,7 @@ def wait_one(
 
 
 def health(base_url: str) -> dict:
-    r = httpx.get(f"{base_url.rstrip('/')}/health", timeout=10)
+    r = httpx.get(f"{base_url.rstrip('/')}/v1/asr/health", timeout=10)
     r.raise_for_status()
     return r.json()
 

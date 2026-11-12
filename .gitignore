@@ -10,3 +10,4 @@ __pycache__/
 .env
 *.key
 test_video/
+*logs/

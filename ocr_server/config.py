@@ -47,7 +47,7 @@ REC_BATCH = _positive_int("OCR_REC_BATCH", "rec_batch", 32)
 
 # 同时识别的路数。每路一份检测模型和一份识别模型。
 # 实测两路能缩短两组同时来的总时间；第 4 路没有测过，超过 3 时按 3 启动。
-_WORKER_LIMIT = 3
+_WORKER_LIMIT = 4
 
 
 def _resolve_workers() -> tuple[int, int]:

@@ -15,7 +15,8 @@ from .quality import QualityConfig
 
 # 服务
 HOST = os.getenv("ASR_HOST", "0.0.0.0")
-PORT = int(os.getenv("ASR_PORT", "6006"))
+# 本机默认 7006；公网通过 proxy/ 在 6006 上按路径转发 /v1/asr*。
+PORT = int(os.getenv("ASR_PORT", "7006"))
 SERVICE_VERSION = "1.8.0"
 
 # 模型
